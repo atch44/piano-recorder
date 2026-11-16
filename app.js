@@ -6,7 +6,7 @@ import { rawCaptureSupported, startCapture, buildMp4 } from './video-capture.js'
 
 const $ = (id) => document.getElementById(id);
 const els = {
-  videoToggle: $('videoToggle'), facing: $('facing'), preview: $('preview'),
+  videoToggle: $('videoToggle'), facing: $('facing'), preview: $('preview'), pedal: $('pedal'),
   connect: $('connect'), bluetooth: $('bluetooth'), inputs: $('inputs'), status: $('status'),
   note: $('note'), timer: $('timer'), rec: $('rec'), stop: $('stop'),
   list: $('list'), empty: $('empty'),
@@ -86,6 +86,10 @@ function handleMidi(data, time) {
   if (status >= 0xf0) return;
 
   if (type === 0x90 && d2 > 0) els.note.textContent = `${noteName(d1)}  (vel ${d2})`;
+  // Show pedal / control messages so it's visible whether the piano sends them.
+  if (type === 0xb0) {
+    els.pedal.textContent = d1 === 64 ? `Pedal ${d2 >= 64 ? '▼ down' : '▲ up'} (${d2})` : `CC ${d1}: ${d2}`;
+  }
 
   if (recording) {
     events.push({ t: time - startTime, data: Array.from(data) });
@@ -394,6 +398,18 @@ function save() {
   catch { els.status.textContent = 'Could not save (storage full?). Export your takes.'; }
 }
 
+function pedalPresses(evts) {
+  let down = false;
+  let count = 0;
+  for (const e of evts) {
+    const [s, d1, d2] = e.data;
+    if ((s & 0xf0) !== 0xb0 || d1 !== 64) continue;
+    if (d2 >= 64 && !down) count++;
+    down = d2 >= 64;
+  }
+  return count;
+}
+
 function fmt(ms) {
   const s = Math.floor(ms / 1000);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -407,7 +423,7 @@ function render() {
     const playing = playingId === rec.id;
     li.innerHTML = `
       <div>${rec.name}</div>
-      <div class="meta">${fmt(rec.duration)} · ${rec.notes} notes</div>
+      <div class="meta">${fmt(rec.duration)} · ${rec.notes} notes · ${pedalPresses(rec.events)} pedal presses</div>
       <div class="actions">
         <button data-a="play">${playing ? '■ Stop' : '▶ Play'}</button>
         ${rec.hasVideo ? '<button data-a="watch">🎬 Watch</button><button data-a="vid">Video</button>' : ''}
