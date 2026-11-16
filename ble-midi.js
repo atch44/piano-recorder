@@ -35,7 +35,9 @@ export const bleSupported = () => !!navigator.bluetooth;
 /** Opens the Bluetooth device chooser and starts streaming MIDI. */
 export async function connectBle(onMessage, onDisconnect) {
   const device = await navigator.bluetooth.requestDevice({
-    filters: [{ services: [SERVICE] }],
+    // Show all nearby devices: some pianos don't advertise the MIDI service UUID.
+    acceptAllDevices: true,
+    optionalServices: [SERVICE],
   });
   device.addEventListener('gattserverdisconnected', onDisconnect);
   const server = await device.gatt.connect();
