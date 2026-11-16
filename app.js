@@ -1,5 +1,6 @@
 import { toMidiFile } from './midi-file.js';
 import { bleSupported, connectBle } from './ble-midi.js';
+import { startPlayback, renderToBuffer, encodeWav, encodeMp3 } from './audio-render.js';
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -150,61 +151,64 @@ els.stop.addEventListener('click', () => {
   render();
 });
 
-// ---------- Playback (simple oscillator synth) ----------
-let audio = null;
-let playTimers = [];
+// ---------- Playback (sampled piano via Tone.js) ----------
+let player = null;
+let playTimer = null;
 let playingId = null;
 
 function stopPlayback() {
-  playTimers.forEach(clearTimeout);
-  playTimers = [];
-  if (audio) { audio.close(); audio = null; }
+  clearTimeout(playTimer);
+  player?.stop();
+  player = null;
   playingId = null;
   render();
 }
 
-function play(rec) {
+async function play(rec) {
   if (playingId) stopPlayback();
-  audio = new AudioContext();
   playingId = rec.id;
-  const voices = new Map();
-  const now = audio.currentTime + 0.1;
-
-  for (const ev of rec.events) {
-    const [status, n, vel] = ev.data;
-    const type = status & 0xf0;
-    const when = now + ev.t / 1000;
-    if (type === 0x90 && vel > 0) {
-      const osc = audio.createOscillator();
-      const gain = audio.createGain();
-      osc.type = 'triangle';
-      osc.frequency.value = 440 * 2 ** ((n - 69) / 12);
-      gain.gain.setValueAtTime(0, when);
-      gain.gain.linearRampToValueAtTime((vel / 127) * 0.3, when + 0.01);
-      osc.connect(gain).connect(audio.destination);
-      osc.start(when);
-      voices.set(n, { osc, gain });
-    } else if (type === 0x80 || (type === 0x90 && vel === 0)) {
-      const v = voices.get(n);
-      if (v) {
-        v.gain.gain.setTargetAtTime(0, when, 0.08);
-        v.osc.stop(when + 0.6);
-        voices.delete(n);
-      }
-    }
-  }
-  playTimers.push(setTimeout(stopPlayback, rec.duration + 1500));
+  els.status.textContent = 'Loading piano sound…';
   render();
+  try {
+    const p = await startPlayback(rec);
+    if (playingId !== rec.id) { p.stop(); return; } // stopped while loading
+    player = p;
+    els.status.textContent = 'Playing…';
+    playTimer = setTimeout(stopPlayback, rec.duration + 4000);
+  } catch (e) {
+    playingId = null;
+    els.status.textContent = `Playback failed: ${e.message}`;
+    render();
+  }
 }
 
 // ---------- Export / storage ----------
-function download(rec) {
-  const blob = new Blob([toMidiFile(rec.events)], { type: 'audio/midi' });
+function saveBlob(blob, rec, ext) {
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = rec.name.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_') + '.mid';
+  a.download = rec.name.replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '_') + '.' + ext;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+function download(rec) {
+  saveBlob(new Blob([toMidiFile(rec.events)], { type: 'audio/midi' }), rec, 'mid');
+}
+
+async function exportAudio(rec, format, btn) {
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Rendering…';
+  try {
+    const buffer = await renderToBuffer(rec);
+    const blob = format === 'mp3' ? await encodeMp3(buffer) : encodeWav(buffer);
+    saveBlob(blob, rec, format);
+  } catch (e) {
+    els.status.textContent = `Export failed: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
 }
 
 function load() {
@@ -232,11 +236,17 @@ function render() {
       <div class="meta">${fmt(rec.duration)} · ${rec.notes} notes</div>
       <div class="actions">
         <button data-a="play">${playing ? '■ Stop' : '▶ Play'}</button>
-        <button data-a="dl">Download .mid</button>
+        <button data-a="dl">.mid</button>
+        <button data-a="mp3">MP3</button>
+        <button data-a="wav">WAV</button>
         <button data-a="del">Delete</button>
       </div>`;
     li.querySelector('[data-a=play]').onclick = () => (playing ? stopPlayback() : play(rec));
     li.querySelector('[data-a=dl]').onclick = () => download(rec);
+    for (const f of ['mp3', 'wav']) {
+      const b = li.querySelector(`[data-a=${f}]`);
+      b.onclick = () => exportAudio(rec, f, b);
+    }
     li.querySelector('[data-a=del]').onclick = () => {
       if (!confirm('Delete this recording?')) return;
       if (playing) stopPlayback();

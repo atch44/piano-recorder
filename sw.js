@@ -1,5 +1,8 @@
-const CACHE = 'piano-rec-v3';
-const FILES = ['./', 'index.html', 'app.js', 'midi-file.js', 'ble-midi.js', 'style.css', 'manifest.webmanifest', 'icon.svg'];
+const CACHE = 'piano-rec-v5';
+const FILES = [
+  './', 'index.html', 'app.js', 'midi-file.js', 'ble-midi.js', 'audio-render.js',
+  'style.css', 'manifest.webmanifest', 'icon.svg',
+];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)));
@@ -12,7 +15,21 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-// Network first, fall back to cache so updates show up but the app works offline.
+const BIG = /\/(samples\/|tone\.js|lame\.min\.js)/;
+
 self.addEventListener('fetch', (e) => {
-  e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
+  const req = e.request;
+  if (req.method !== 'GET') return;
+  if (BIG.test(req.url)) {
+    // Large, rarely-changing files: cache first, fill the cache on first use.
+    e.respondWith(
+      caches.match(req).then((hit) => hit || fetch(req).then((res) => {
+        if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
+        return res;
+      }))
+    );
+    return;
+  }
+  // App files: network first so updates show up, cache as the offline fallback.
+  e.respondWith(fetch(req).catch(() => caches.match(req)));
 });
