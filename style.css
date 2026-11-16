@@ -31,3 +31,8 @@ li:first-child { border-top: 0; }
 li .meta { color: var(--muted); font-size: .85rem; }
 li .actions { display: flex; gap: 6px; margin-top: 6px; }
 li .actions button { padding: 6px 10px; font-size: .9rem; }
+.videoopts { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
+.videoopts label.check { margin: 0; display: flex; gap: 8px; align-items: center; color: var(--text); }
+.videoopts select { margin: 0; flex: 1; }
+video { width: 100%; border-radius: 8px; background: #000; margin: 0 0 12px; max-height: 40vh; }
+li video { margin: 8px 0 0; }

@@ -1,9 +1,11 @@
 import { toMidiFile } from './midi-file.js';
 import { bleSupported, connectBle } from './ble-midi.js';
-import { startPlayback, renderToBuffer, encodeWav, encodeMp3 } from './audio-render.js';
+import { startPlayback, renderToBuffer, encodeWav, encodeMp3, createLiveAudio } from './audio-render.js';
+import { putVideo, getVideo, delVideo } from './video-store.js';
 
 const $ = (id) => document.getElementById(id);
 const els = {
+  videoToggle: $('videoToggle'), facing: $('facing'), preview: $('preview'),
   connect: $('connect'), bluetooth: $('bluetooth'), inputs: $('inputs'), status: $('status'),
   note: $('note'), timer: $('timer'), rec: $('rec'), stop: $('stop'),
   list: $('list'), empty: $('empty'),
@@ -86,6 +88,7 @@ function handleMidi(data, time) {
 
   if (recording) {
     events.push({ t: time - startTime, data: Array.from(data) });
+    liveAudio?.handle(data);
   }
 }
 
@@ -111,28 +114,131 @@ els.bluetooth.addEventListener('click', async () => {
   }
 });
 
+// ---------- Camera ----------
+let camStream = null;
+let liveAudio = null; // live piano voice that feeds the video's audio track
+let mediaRec = null;
+let videoChunks = [];
+
+async function startCamera() {
+  stopCamera();
+  camStream = await navigator.mediaDevices.getUserMedia({
+    video: { facingMode: els.facing.value },
+    audio: false,
+  });
+  els.preview.srcObject = camStream;
+  els.preview.hidden = false;
+}
+
+function stopCamera() {
+  camStream?.getTracks().forEach((t) => t.stop());
+  camStream = null;
+  els.preview.srcObject = null;
+  els.preview.hidden = true;
+}
+
+els.videoToggle.addEventListener('change', async () => {
+  els.facing.hidden = !els.videoToggle.checked;
+  if (!els.videoToggle.checked) return stopCamera();
+  if (!navigator.mediaDevices?.getUserMedia) {
+    els.status.textContent = 'Camera is not available in this browser.';
+    els.videoToggle.checked = false;
+    els.facing.hidden = true;
+    return;
+  }
+  try {
+    await startCamera();
+  } catch (e) {
+    els.status.textContent = `Camera: ${e.message}`;
+    els.videoToggle.checked = false;
+    els.facing.hidden = true;
+  }
+});
+
+els.facing.addEventListener('change', () => {
+  if (els.videoToggle.checked && !recording) {
+    startCamera().catch((e) => { els.status.textContent = `Camera: ${e.message}`; });
+  }
+});
+
+function pickVideoType() {
+  const types = [
+    'video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4',
+    'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm',
+  ];
+  return types.find((t) => MediaRecorder.isTypeSupported(t)) || '';
+}
+
+/** Camera video + live piano audio in one MediaRecorder. */
+async function prepareVideo() {
+  if (!camStream) await startCamera();
+  els.status.textContent = 'Loading piano sound…';
+  liveAudio = await createLiveAudio();
+  const stream = new MediaStream([
+    ...camStream.getVideoTracks(),
+    ...liveAudio.stream.getAudioTracks(),
+  ]);
+  const mimeType = pickVideoType();
+  videoChunks = [];
+  const mr = new MediaRecorder(stream, {
+    ...(mimeType && { mimeType }),
+    videoBitsPerSecond: 2_500_000,
+    audioBitsPerSecond: 128_000,
+  });
+  mr.ondataavailable = (e) => { if (e.data.size) videoChunks.push(e.data); };
+  return mr;
+}
+
+/** Stops the recorder (after a short tail so the last notes ring out). Returns a Blob or null. */
+async function finishVideo() {
+  if (!mediaRec) return null;
+  const mr = mediaRec;
+  mediaRec = null;
+  await new Promise((r) => setTimeout(r, 1000));
+  await new Promise((resolve) => { mr.onstop = resolve; mr.stop(); });
+  liveAudio?.close();
+  liveAudio = null;
+  const blob = new Blob(videoChunks, { type: mr.mimeType });
+  videoChunks = [];
+  return blob.size ? blob : null;
+}
+
 // ---------- Recording ----------
-els.rec.addEventListener('click', () => {
+els.rec.addEventListener('click', async () => {
+  els.rec.disabled = true;
+  if (els.videoToggle.checked) {
+    try {
+      mediaRec = await prepareVideo();
+    } catch (e) {
+      els.status.textContent = `Video: ${e.message}`;
+      els.rec.disabled = false;
+      return;
+    }
+  }
   events = [];
   recording = true;
   startTime = performance.now();
+  mediaRec?.start(1000);
+  els.status.textContent = mediaRec ? 'Recording (with video)…' : 'Recording…';
   els.rec.classList.add('active');
-  els.rec.disabled = true;
   els.stop.disabled = false;
   timerId = setInterval(() => {
     els.timer.textContent = fmt(performance.now() - startTime);
   }, 250);
 });
 
-els.stop.addEventListener('click', () => {
+els.stop.addEventListener('click', async () => {
   if (!recording) return;
   recording = false;
   clearInterval(timerId);
   els.rec.classList.remove('active');
-  els.rec.disabled = !currentInput && !ble;
   els.stop.disabled = true;
 
   const notes = events.filter((e) => (e.data[0] & 0xf0) === 0x90 && e.data[2] > 0).length;
+  if (mediaRec) els.status.textContent = 'Finishing video…';
+  const videoBlob = await finishVideo();
+  els.rec.disabled = !currentInput && !ble;
+
   if (!notes) {
     els.status.textContent = 'No notes recorded — nothing saved.';
     return;
@@ -140,15 +246,26 @@ els.stop.addEventListener('click', () => {
   // Shift so the recording starts at the first event, not the button press.
   const t0 = events[0].t;
   events.forEach((e) => (e.t -= t0));
-  recordings.unshift({
+  const rec = {
     id: Date.now(),
     name: 'Take ' + new Date().toLocaleString(),
     duration: events[events.length - 1].t,
     notes,
     events,
-  });
+  };
+  if (videoBlob) {
+    try {
+      await putVideo(rec.id, videoBlob);
+      rec.hasVideo = true;
+      rec.videoExt = videoBlob.type.includes('mp4') ? 'mp4' : 'webm';
+    } catch (e) {
+      els.status.textContent = `Video could not be saved (${e.message}); MIDI was saved.`;
+    }
+  }
+  recordings.unshift(rec);
   save();
   render();
+  if (rec.hasVideo) els.status.textContent = 'Saved take with video.';
 });
 
 // ---------- Playback (sampled piano via Tone.js) ----------
@@ -236,6 +353,7 @@ function render() {
       <div class="meta">${fmt(rec.duration)} · ${rec.notes} notes</div>
       <div class="actions">
         <button data-a="play">${playing ? '■ Stop' : '▶ Play'}</button>
+        ${rec.hasVideo ? '<button data-a="watch">🎬 Watch</button><button data-a="vid">Video</button>' : ''}
         <button data-a="dl">.mid</button>
         <button data-a="mp3">MP3</button>
         <button data-a="wav">WAV</button>
@@ -243,6 +361,24 @@ function render() {
       </div>`;
     li.querySelector('[data-a=play]').onclick = () => (playing ? stopPlayback() : play(rec));
     li.querySelector('[data-a=dl]').onclick = () => download(rec);
+    if (rec.hasVideo) {
+      li.querySelector('[data-a=vid]').onclick = async () => {
+        const blob = await getVideo(rec.id).catch(() => null);
+        if (!blob) { els.status.textContent = 'Video not found (browser data cleared?).'; return; }
+        saveBlob(blob, rec, rec.videoExt || 'webm');
+      };
+      li.querySelector('[data-a=watch]').onclick = async () => {
+        const existing = li.querySelector('video');
+        if (existing) { URL.revokeObjectURL(existing.src); existing.remove(); return; }
+        const blob = await getVideo(rec.id).catch(() => null);
+        if (!blob) { els.status.textContent = 'Video not found (browser data cleared?).'; return; }
+        const v = document.createElement('video');
+        v.src = URL.createObjectURL(blob);
+        v.controls = true;
+        v.playsInline = true;
+        li.appendChild(v);
+      };
+    }
     for (const f of ['mp3', 'wav']) {
       const b = li.querySelector(`[data-a=${f}]`);
       b.onclick = () => exportAudio(rec, f, b);
@@ -251,6 +387,7 @@ function render() {
       if (!confirm('Delete this recording?')) return;
       if (playing) stopPlayback();
       recordings = recordings.filter((r) => r.id !== rec.id);
+      if (rec.hasVideo) delVideo(rec.id).catch(() => {});
       save();
       render();
     };

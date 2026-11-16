@@ -24,6 +24,14 @@
     </section>
 
     <section>
+      <div class="videoopts">
+        <label class="check"><input type="checkbox" id="videoToggle"> Record video too</label>
+        <select id="facing" hidden>
+          <option value="environment">Back camera</option>
+          <option value="user">Front camera</option>
+        </select>
+      </div>
+      <video id="preview" autoplay muted playsinline hidden></video>
       <div class="live">
         <span id="note">–</span>
         <span id="timer" class="muted">0:00</span>

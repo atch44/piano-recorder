@@ -107,6 +107,52 @@ export async function startPlayback(rec) {
   };
 }
 
+// ---------- live audio for video recording ----------
+/**
+ * A live piano voice that plays MIDI into a MediaStream (not the speakers), so it can
+ * be recorded together with the camera. Returns { stream, handle(midiBytes), close() }.
+ */
+export async function createLiveAudio() {
+  await loadPiano();
+  const T = window.Tone;
+  await T.start();
+  const dest = T.getContext().createMediaStreamDestination();
+  const sampler = makeSampler();
+  sampler.connect(dest);
+  const held = new Set();
+  const sustained = new Set();
+  let pedal = false;
+  const name = (m) => T.Frequency(m, 'midi').toNote();
+
+  return {
+    stream: dest.stream,
+    handle(data) {
+      const [status, d1, d2] = data;
+      const type = status & 0xf0;
+      if (type === 0x90 && d2 > 0) {
+        sampler.triggerAttack(name(d1), T.now(), d2 / 127);
+        held.add(d1);
+        sustained.delete(d1);
+      } else if (type === 0x80 || (type === 0x90 && d2 === 0)) {
+        held.delete(d1);
+        if (pedal) sustained.add(d1);
+        else sampler.triggerRelease(name(d1), T.now());
+      } else if (type === 0xb0 && d1 === 64) {
+        const down = d2 >= 64;
+        if (pedal && !down) {
+          for (const m of sustained) if (!held.has(m)) sampler.triggerRelease(name(m), T.now());
+          sustained.clear();
+        }
+        pedal = down;
+      }
+    },
+    close() {
+      sampler.releaseAll();
+      setTimeout(() => sampler.dispose(), 1500);
+    },
+  };
+}
+
 // ---------- offline render ----------
 export async function renderToBuffer(rec) {
   await loadPiano();

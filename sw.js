@@ -1,6 +1,6 @@
-const CACHE = 'piano-rec-v5';
+const CACHE = 'piano-rec-v6';
 const FILES = [
-  './', 'index.html', 'app.js', 'midi-file.js', 'ble-midi.js', 'audio-render.js',
+  './', 'index.html', 'app.js', 'midi-file.js', 'ble-midi.js', 'audio-render.js', 'video-store.js',
   'style.css', 'manifest.webmanifest', 'icon.svg',
 ];
 
