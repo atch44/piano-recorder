@@ -18,6 +18,11 @@ const noteName = (n) => NOTE_NAMES[n % 12] + (Math.floor(n / 12) - 1);
 let access = null;
 let currentInput = null;
 let recording = false;
+// The piano only sends pedal messages when the pedal moves, so remember its last state
+// to add at the start of a take (e.g. the foot is already down when Record is pressed).
+let pedalValue = 0;
+let pedalStatus = 0xb0;
+let recStartPedal = 0;
 let startTime = 0;
 let events = [];
 let timerId = null;
@@ -88,6 +93,10 @@ function handleMidi(data, time) {
 
   if (type === 0x90 && d2 > 0) els.note.textContent = `${noteName(d1)}  (vel ${d2})`;
   // Show pedal / control messages so it's visible whether the piano sends them.
+  if (type === 0xb0 && d1 === 64) {
+    pedalValue = d2;
+    pedalStatus = status;
+  }
   if (type === 0xb0) {
     els.pedal.textContent = d1 === 64 ? `Pedal ${d2 >= 64 ? '▼ down' : '▲ up'} (${d2})` : `CC ${d1}: ${d2}`;
   }
@@ -297,6 +306,8 @@ els.rec.addEventListener('click', async () => {
   events = [];
   recording = true;
   startTime = performance.now();
+  recStartPedal = pedalValue;
+  if (recStartPedal > 0) liveAudio?.handle([pedalStatus, 64, recStartPedal]);
   if (useCapture) capture = startCapture(camStream.getVideoTracks()[0]);
   mediaRec?.start(1000);
   els.status.textContent = capture || mediaRec ? 'Recording (with video)…' : 'Recording…';
@@ -334,6 +345,8 @@ els.stop.addEventListener('click', async () => {
   // Shift so the recording starts at the first event, not the button press.
   const t0 = events[0].t;
   events.forEach((e) => (e.t -= t0));
+  // Pedal already held when recording started: add its state at the start of the take.
+  if (recStartPedal > 0) events.unshift({ t: 0, data: [pedalStatus, 64, recStartPedal] });
   const rec = {
     id: Date.now(),
     name: 'Take ' + new Date().toLocaleString(),
