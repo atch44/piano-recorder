@@ -1,5 +1,5 @@
-const CACHE = 'piano-rec-v1';
-const FILES = ['./', 'index.html', 'app.js', 'midi-file.js', 'style.css', 'manifest.webmanifest', 'icon.svg'];
+const CACHE = 'piano-rec-v2';
+const FILES = ['./', 'index.html', 'app.js', 'midi-file.js', 'ble-midi.js', 'style.css', 'manifest.webmanifest', 'icon.svg'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)));

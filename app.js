@@ -1,8 +1,9 @@
 import { toMidiFile } from './midi-file.js';
+import { bleSupported, connectBle } from './ble-midi.js';
 
 const $ = (id) => document.getElementById(id);
 const els = {
-  connect: $('connect'), inputs: $('inputs'), status: $('status'),
+  connect: $('connect'), bluetooth: $('bluetooth'), inputs: $('inputs'), status: $('status'),
   note: $('note'), timer: $('timer'), rec: $('rec'), stop: $('stop'),
   list: $('list'), empty: $('empty'),
 };
@@ -39,7 +40,7 @@ function refreshInputs() {
   if (!ins.length) {
     els.inputs.innerHTML = '<option>No devices</option>';
     els.inputs.disabled = true;
-    els.rec.disabled = true;
+    els.rec.disabled = recording || !ble;
     els.status.textContent = 'No MIDI device found. Plug in the piano via USB.';
     setInput(null);
     return;
@@ -71,7 +72,11 @@ function setInput(input) {
 }
 
 function onMessage(e) {
-  const [status, d1, d2] = e.data;
+  handleMidi(e.data, e.timeStamp);
+}
+
+function handleMidi(data, time) {
+  const [status, d1, d2] = data;
   const type = status & 0xf0;
   // Ignore clock / active sensing / sysex noise.
   if (status >= 0xf0) return;
@@ -79,9 +84,31 @@ function onMessage(e) {
   if (type === 0x90 && d2 > 0) els.note.textContent = `${noteName(d1)}  (vel ${d2})`;
 
   if (recording) {
-    events.push({ t: e.timeStamp - startTime, data: Array.from(e.data) });
+    events.push({ t: time - startTime, data: Array.from(data) });
   }
 }
+
+// ---------- Bluetooth (BLE MIDI via Web Bluetooth) ----------
+let ble = null;
+
+els.bluetooth.addEventListener('click', async () => {
+  if (!bleSupported()) {
+    els.status.textContent = 'Web Bluetooth is not supported here. Use Chrome on Android.';
+    return;
+  }
+  els.status.textContent = 'Choose your piano in the Bluetooth list…';
+  try {
+    ble = await connectBle(handleMidi, () => {
+      ble = null;
+      els.rec.disabled = recording || !currentInput;
+      els.status.textContent = 'Bluetooth disconnected.';
+    });
+    els.status.textContent = `Connected via Bluetooth: ${ble.name}`;
+    els.rec.disabled = recording;
+  } catch (e) {
+    els.status.textContent = 'Bluetooth: ' + (e.name === 'NotFoundError' ? 'no device chosen.' : e.message);
+  }
+});
 
 // ---------- Recording ----------
 els.rec.addEventListener('click', () => {
@@ -101,7 +128,7 @@ els.stop.addEventListener('click', () => {
   recording = false;
   clearInterval(timerId);
   els.rec.classList.remove('active');
-  els.rec.disabled = !currentInput;
+  els.rec.disabled = !currentInput && !ble;
   els.stop.disabled = true;
 
   const notes = events.filter((e) => (e.data[0] & 0xf0) === 0x90 && e.data[2] > 0).length;
