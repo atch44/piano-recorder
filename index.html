@@ -31,6 +31,10 @@
           <option value="user">Front camera</option>
         </select>
       </div>
+      <label id="zoomRow" class="zoom" hidden>
+        Zoom <strong id="zoomVal">1.0×</strong> <span id="zoomRange"></span>
+        <input type="range" id="zoom" min="1" max="1" step="0.1" value="1">
+      </label>
       <video id="preview" autoplay muted playsinline hidden></video>
       <div class="live">
         <span id="note">–</span>

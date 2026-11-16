@@ -7,6 +7,7 @@ import { rawCaptureSupported, startCapture, buildMp4 } from './video-capture.js'
 const $ = (id) => document.getElementById(id);
 const els = {
   videoToggle: $('videoToggle'), facing: $('facing'), preview: $('preview'), pedal: $('pedal'),
+  zoomRow: $('zoomRow'), zoom: $('zoom'), zoomVal: $('zoomVal'), zoomRange: $('zoomRange'),
   connect: $('connect'), bluetooth: $('bluetooth'), inputs: $('inputs'), status: $('status'),
   note: $('note'), timer: $('timer'), rec: $('rec'), stop: $('stop'),
   list: $('list'), empty: $('empty'),
@@ -125,14 +126,27 @@ let liveAudio = null; // live piano voice that feeds the video's audio track
 let mediaRec = null;
 let videoChunks = [];
 
+const pref = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const setPref = (k, v) => { try { localStorage.setItem(k, v); } catch { /* ignore */ } };
+
 async function startCamera() {
   stopCamera();
-  camStream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: els.facing.value },
-    audio: false,
-  });
+  // The select holds either a facing mode (before cameras are listed) or a deviceId.
+  const choice = els.facing.value;
+  const saved = pref('camera');
+  const byFacing = choice === 'environment' || choice === 'user';
+  const deviceId = byFacing ? saved : choice;
+  const open = (video) => navigator.mediaDevices.getUserMedia({ video: { ...video, zoom: true }, audio: false });
+  try {
+    camStream = await open(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: choice });
+  } catch (e) {
+    if (!deviceId) throw e;
+    camStream = await open({ facingMode: 'environment' }); // saved camera no longer exists
+  }
   els.preview.srcObject = camStream;
   els.preview.hidden = false;
+  await listCameras();
+  setupZoom();
 }
 
 function stopCamera() {
@@ -140,7 +154,60 @@ function stopCamera() {
   camStream = null;
   els.preview.srcObject = null;
   els.preview.hidden = true;
+  els.zoomRow.hidden = true;
 }
+
+/** Fill the camera picker with every camera (labels are available once permission is granted). */
+async function listCameras() {
+  const cams = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'videoinput');
+  if (!cams.length) return;
+  const current = camStream?.getVideoTracks()[0]?.getSettings().deviceId;
+  els.facing.innerHTML = '';
+  cams.forEach((d, i) => {
+    const o = document.createElement('option');
+    o.value = d.deviceId;
+    o.textContent = d.label || `Camera ${i + 1}`;
+    els.facing.appendChild(o);
+  });
+  if (current) els.facing.value = current;
+}
+
+function videoTrack() {
+  return camStream?.getVideoTracks()[0];
+}
+
+function showZoom(v) {
+  els.zoomVal.textContent = `${Number(v).toFixed(1)}×`;
+}
+
+/** Show the zoom slider if this camera supports zoom (some phones allow below 1×, e.g. 0.6×). */
+function setupZoom() {
+  const track = videoTrack();
+  const caps = track?.getCapabilities?.().zoom;
+  if (!caps || !(caps.max > caps.min)) { els.zoomRow.hidden = true; return; }
+  els.zoom.min = caps.min;
+  els.zoom.max = caps.max;
+  els.zoom.step = caps.step || 0.1;
+  els.zoomRange.textContent = `(${caps.min}×–${caps.max}×)`;
+  const saved = parseFloat(pref('zoom'));
+  const start = Number.isFinite(saved)
+    ? Math.min(caps.max, Math.max(caps.min, saved))
+    : track.getSettings().zoom ?? caps.min;
+  els.zoom.value = start;
+  applyZoom(start);
+  els.zoomRow.hidden = false;
+}
+
+function applyZoom(v) {
+  showZoom(v);
+  videoTrack()?.applyConstraints({ advanced: [{ zoom: Number(v) }] })
+    .catch((e) => { els.status.textContent = `Zoom: ${e.message}`; });
+}
+
+els.zoom.addEventListener('input', () => {
+  applyZoom(els.zoom.value);
+  setPref('zoom', els.zoom.value);
+});
 
 els.videoToggle.addEventListener('change', async () => {
   els.facing.hidden = !els.videoToggle.checked;
@@ -161,6 +228,8 @@ els.videoToggle.addEventListener('change', async () => {
 });
 
 els.facing.addEventListener('change', () => {
+  if (els.facing.value !== 'environment' && els.facing.value !== 'user') setPref('camera', els.facing.value);
+  setPref('zoom', ''); // a different camera has a different zoom range
   if (els.videoToggle.checked && !recording) {
     startCamera().catch((e) => { els.status.textContent = `Camera: ${e.message}`; });
   }
