@@ -1,4 +1,4 @@
-const CACHE = 'piano-rec-v6';
+const CACHE = 'piano-rec-v7';
 const FILES = [
   './', 'index.html', 'app.js', 'midi-file.js', 'ble-midi.js', 'audio-render.js', 'video-store.js',
   'style.css', 'manifest.webmanifest', 'icon.svg',
@@ -30,6 +30,7 @@ self.addEventListener('fetch', (e) => {
     );
     return;
   }
-  // App files: network first so updates show up, cache as the offline fallback.
-  e.respondWith(fetch(req).catch(() => caches.match(req)));
+  // App files: network first, bypassing the browser's HTTP cache (GitHub Pages sends
+  // max-age=600) so a new page never runs with stale scripts. Cache is the offline fallback.
+  e.respondWith(fetch(req, { cache: 'no-cache' }).catch(() => caches.match(req)));
 });
