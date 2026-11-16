@@ -24,7 +24,7 @@ A web app (PWA) that connects to a Roland FP-10 digital piano from an Android ph
 - Takes saved in the browser's local storage.
 - Playback with a sampled grand piano and **sustain pedal** support.
 - Export each take as **.mid**, **MP3** or **WAV** (audio is rendered offline with the same piano sound).
-- **Video recording (optional):** tick "Record video too" to record the camera (front or back) together with the piano sound. The piano sound is rendered live from your MIDI (same sampled piano, sent to the recording only, not the speakers), so the video file already has the audio merged in. Download it with the **Video** button or preview it with **Watch**. Saved as MP4 where Chrome supports it, otherwise WebM. Videos are stored in IndexedDB.
+- **Video recording (optional):** tick "Record video too" to record the camera (front or back). Camera frames are encoded with WebCodecs (H.264), each with a timestamp on the same clock as the MIDI events. On **Watch** or **Video** (download), the piano audio is rendered from the MIDI, placed against those timestamps, and combined into an MP4 (AAC or Opus audio) with `mp4-muxer`. This avoids the drift of the first version, which recorded live audio and camera together with MediaRecorder (still used as a fallback where WebCodecs is missing). Videos are stored in IndexedDB.
 - Installable (manifest + service worker), works offline after first load.
 
 ## Files
@@ -36,7 +36,9 @@ A web app (PWA) that connects to a Roland FP-10 digital piano from an Android ph
 | `ble-midi.js` | Web Bluetooth connection and BLE MIDI packet parser |
 | `midi-file.js` | Writes Standard MIDI Files (1 tick = 1 ms at 120 BPM) |
 | `audio-render.js` | Notes + pedal logic, Tone.js playback, offline render, WAV and MP3 encoders |
-| `video-store.js` | Stores recorded video blobs in IndexedDB |
+| `video-store.js` | Stores recorded video (encoded frames or blobs) in IndexedDB |
+| `video-capture.js` | WebCodecs camera capture, audio encoding, MP4 muxing |
+| `mp4-muxer.js` | Bundled mp4-muxer 5.1.3 (MIT, see `mp4-muxer.LICENSE.txt`) |
 | `tone.js`, `samples/` | Bundled Tone.js 14.7.77 and 30 Salamander piano samples (~2 MB) |
 | `lame.min.js` | Bundled lamejs 1.2.1 MP3 encoder (LGPL, see `lame.LICENSE.txt`) |
 | `sw.js`, `manifest.webmanifest`, `icon.svg` | PWA offline caching and install |
@@ -64,8 +66,8 @@ A web app (PWA) that connects to a Roland FP-10 digital piano from an Android ph
 
 - Takes (and videos) live in browser storage; clearing site data deletes them. Download `.mid` and video files to keep them.
 - Video is about 19 MB per minute (2.5 Mbps), so long takes use phone storage quickly.
-- The video's audio is rendered live while recording and is baked in; later changes to the piano sound don't affect old videos. The MP3/WAV exports are rendered separately from the MIDI.
-- The video feature is untested on a phone (camera permission, MP4 vs WebM support, live audio capture).
+- First video version (live audio via MediaRecorder) drifted out of sync by ~2 s on longer takes. Replaced by the WebCodecs approach above; the new version is untested on a phone (H.264/AAC encoder support, portrait rotation, sync).
+- Building the MP4 takes a few seconds per take (audio render + encode), the first time Watch/Video is pressed in a session.
 - After an update, the service worker can serve the old version until the page is reloaded or site data is cleared.
 - Bluetooth timing is slightly looser than USB.
 - Exports are mono, 44.1 kHz; MP3 at 128 kbps.

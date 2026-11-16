@@ -2,6 +2,7 @@ import { toMidiFile } from './midi-file.js';
 import { bleSupported, connectBle } from './ble-midi.js';
 import { startPlayback, renderToBuffer, encodeWav, encodeMp3, createLiveAudio } from './audio-render.js';
 import { putVideo, getVideo, delVideo } from './video-store.js';
+import { rawCaptureSupported, startCapture, buildMp4 } from './video-capture.js';
 
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -204,11 +205,16 @@ async function finishVideo() {
 }
 
 // ---------- Recording ----------
+let capture = null; // frame-accurate WebCodecs capture (preferred)
+
 els.rec.addEventListener('click', async () => {
   els.rec.disabled = true;
+  let useCapture = false;
   if (els.videoToggle.checked) {
     try {
-      mediaRec = await prepareVideo();
+      if (!camStream || camStream.getVideoTracks()[0]?.readyState !== 'live') await startCamera();
+      if (rawCaptureSupported()) useCapture = true;
+      else mediaRec = await prepareVideo(); // fallback: live audio + MediaRecorder
     } catch (e) {
       els.status.textContent = `Video: ${e.message}`;
       els.rec.disabled = false;
@@ -218,8 +224,9 @@ els.rec.addEventListener('click', async () => {
   events = [];
   recording = true;
   startTime = performance.now();
+  if (useCapture) capture = startCapture(camStream.getVideoTracks()[0]);
   mediaRec?.start(1000);
-  els.status.textContent = mediaRec ? 'Recording (with video)…' : 'Recording…';
+  els.status.textContent = capture || mediaRec ? 'Recording (with video)…' : 'Recording…';
   els.rec.classList.add('active');
   els.stop.disabled = false;
   timerId = setInterval(() => {
@@ -235,8 +242,16 @@ els.stop.addEventListener('click', async () => {
   els.stop.disabled = true;
 
   const notes = events.filter((e) => (e.data[0] & 0xf0) === 0x90 && e.data[2] > 0).length;
-  if (mediaRec) els.status.textContent = 'Finishing video…';
+  if (mediaRec || capture) els.status.textContent = 'Finishing video…';
   const videoBlob = await finishVideo();
+  let cap = null;
+  let capError = null;
+  if (capture) {
+    const c = capture;
+    capture = null;
+    await new Promise((r) => setTimeout(r, 1000)); // let the last notes ring out on video
+    try { cap = await c.stop(); } catch (e) { capError = e; }
+  }
   els.rec.disabled = !currentInput && !ble;
 
   if (!notes) {
@@ -253,19 +268,29 @@ els.stop.addEventListener('click', async () => {
     notes,
     events,
   };
-  if (videoBlob) {
+  let videoError = capError && `Video failed (${capError.message}); MIDI was saved.`;
+  if (videoBlob || cap) {
     try {
-      await putVideo(rec.id, videoBlob);
+      if (cap) {
+        await putVideo(rec.id, cap);
+        rec.videoExt = 'mp4';
+        rec.t0 = t0; // ms from record start to first MIDI event
+        rec.videoStart = cap.startWall - startTime; // ms from record start to first frame
+        const last = cap.chunks[cap.chunks.length - 1];
+        rec.videoDuration = (last.ts + (last.dur || 33_333)) / 1000;
+      } else {
+        await putVideo(rec.id, videoBlob);
+        rec.videoExt = videoBlob.type.includes('mp4') ? 'mp4' : 'webm';
+      }
       rec.hasVideo = true;
-      rec.videoExt = videoBlob.type.includes('mp4') ? 'mp4' : 'webm';
     } catch (e) {
-      els.status.textContent = `Video could not be saved (${e.message}); MIDI was saved.`;
+      videoError = `Video could not be saved (${e.message}); MIDI was saved.`;
     }
   }
   recordings.unshift(rec);
   save();
   render();
-  if (rec.hasVideo) els.status.textContent = 'Saved take with video.';
+  els.status.textContent = videoError || (rec.hasVideo ? 'Saved take with video.' : 'Saved.');
 });
 
 // ---------- Playback (sampled piano via Tone.js) ----------
@@ -328,6 +353,38 @@ async function exportAudio(rec, format, btn) {
   }
 }
 
+// Finished video files, built once per session from the stored frames + rendered audio.
+const builtVideos = new Map();
+
+async function videoFile(rec, btn) {
+  if (builtVideos.has(rec.id)) return builtVideos.get(rec.id);
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Preparing…';
+  try {
+    const stored = await getVideo(rec.id);
+    if (!stored) throw new Error('video not found (browser data cleared?)');
+    let blob = stored;
+    if (!(stored instanceof Blob)) {
+      // Place the take's first note at the same moment it happened relative to the first frame.
+      const audio = await renderToBuffer(rec, {
+        offset: (rec.t0 - rec.videoStart) / 1000,
+        seconds: Math.max(rec.videoDuration / 1000, 0.5),
+        sampleRate: 48000,
+      });
+      blob = await buildMp4(stored, audio);
+    }
+    builtVideos.set(rec.id, blob);
+    return blob;
+  } catch (e) {
+    els.status.textContent = `Video: ${e.message}`;
+    return null;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
 function load() {
   try { return JSON.parse(localStorage.getItem('recordings') || '[]'); }
   catch { return []; }
@@ -362,16 +419,15 @@ function render() {
     li.querySelector('[data-a=play]').onclick = () => (playing ? stopPlayback() : play(rec));
     li.querySelector('[data-a=dl]').onclick = () => download(rec);
     if (rec.hasVideo) {
-      li.querySelector('[data-a=vid]').onclick = async () => {
-        const blob = await getVideo(rec.id).catch(() => null);
-        if (!blob) { els.status.textContent = 'Video not found (browser data cleared?).'; return; }
-        saveBlob(blob, rec, rec.videoExt || 'webm');
+      li.querySelector('[data-a=vid]').onclick = async (ev) => {
+        const blob = await videoFile(rec, ev.currentTarget);
+        if (blob) saveBlob(blob, rec, rec.videoExt || 'webm');
       };
-      li.querySelector('[data-a=watch]').onclick = async () => {
+      li.querySelector('[data-a=watch]').onclick = async (ev) => {
         const existing = li.querySelector('video');
         if (existing) { URL.revokeObjectURL(existing.src); existing.remove(); return; }
-        const blob = await getVideo(rec.id).catch(() => null);
-        if (!blob) { els.status.textContent = 'Video not found (browser data cleared?).'; return; }
+        const blob = await videoFile(rec, ev.currentTarget);
+        if (!blob) return;
         const v = document.createElement('video');
         v.src = URL.createObjectURL(blob);
         v.controls = true;
@@ -388,6 +444,7 @@ function render() {
       if (playing) stopPlayback();
       recordings = recordings.filter((r) => r.id !== rec.id);
       if (rec.hasVideo) delVideo(rec.id).catch(() => {});
+      builtVideos.delete(rec.id);
       save();
       render();
     };

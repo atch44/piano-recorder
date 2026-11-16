@@ -154,15 +154,21 @@ export async function createLiveAudio() {
 }
 
 // ---------- offline render ----------
-export async function renderToBuffer(rec) {
+/**
+ * Render a take to a mono AudioBuffer.
+ * offset: where the take's time 0 lands in the output (seconds; notes before 0 are dropped).
+ * seconds: output length. sampleRate: output sample rate.
+ */
+export async function renderToBuffer(rec, opts = {}) {
+  const { offset = 0.1, sampleRate = SAMPLE_RATE } = opts;
+  const seconds = opts.seconds ?? rec.duration / 1000 + offset + TAIL;
   await loadPiano();
   const T = window.Tone;
-  const notes = buildNotes(rec.events);
-  const seconds = rec.duration / 1000 + TAIL;
+  const notes = buildNotes(rec.events).filter((n) => n.start + offset >= 0);
   const out = await T.Offline(() => {
     const sampler = makeSampler().toDestination();
-    scheduleNotes(sampler, notes, 0.1);
-  }, seconds, 1, SAMPLE_RATE);
+    scheduleNotes(sampler, notes, offset);
+  }, seconds, 1, sampleRate);
   return out.get(); // AudioBuffer
 }
 

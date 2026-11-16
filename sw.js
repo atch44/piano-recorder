@@ -1,6 +1,7 @@
-﻿const CACHE = 'piano-rec-v8';
+﻿const CACHE = 'piano-rec-v9';
 const FILES = [
   './', 'index.html', 'app.js', 'midi-file.js', 'ble-midi.js', 'audio-render.js', 'video-store.js',
+  'video-capture.js',
   'style.css', 'manifest.webmanifest', 'icon.svg',
 ];
 
@@ -15,7 +16,7 @@ self.addEventListener('activate', (e) => {
   );
 });
 
-const BIG = /\/(samples\/|tone\.js|lame\.min\.js)/;
+const BIG = /\/(samples\/|tone\.js|lame\.min\.js|mp4-muxer\.js)/;
 
 self.addEventListener('fetch', (e) => {
   const req = e.request;
