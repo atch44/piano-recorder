@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#14161a">
+  <title>Piano Recorder</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <h1>Piano Recorder</h1>
+
+    <section>
+      <button id="connect" class="primary">Connect to piano</button>
+      <label>Input device
+        <select id="inputs" disabled><option>No devices</option></select>
+      </label>
+      <p id="status" class="muted">Not connected.</p>
+    </section>
+
+    <section>
+      <div class="live">
+        <span id="note">–</span>
+        <span id="timer" class="muted">0:00</span>
+      </div>
+      <div class="row">
+        <button id="rec" disabled>● Record</button>
+        <button id="stop" disabled>■ Stop</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Recordings</h2>
+      <ul id="list"></ul>
+      <p id="empty" class="muted">Nothing recorded yet.</p>
+    </section>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
